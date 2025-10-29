@@ -833,14 +833,17 @@ def get_comprehensive_configuration():
         elif config_file_path:
             print(f"{Colors.YELLOW}   Warning: Benchmark config file not found, will be ignored.{Colors.ENDC}")
 
-        # Memory Consumption
-    # Always enable memory consumption logging for all iterations
-    config['benchmark_memory_consumption'] = '2'  # Always log memory for all iterations
+        # Memory Consumption - Always enable memory consumption logging for all iterations
+        config['benchmark_memory_consumption'] = '2'  # Always log memory for all iterations
 
         # Other benchmark settings
-
-    config['benchmark_input_tokens'] = int(input(f"{Colors.CYAN}   Default input token limit (default: 128): {Colors.ENDC}").strip() or "128")
-    config['benchmark_iterations'] = int(input(f"{Colors.CYAN}   Number of benchmark iterations (default: 1): {Colors.ENDC}").strip() or "1")
+        config['benchmark_input_tokens'] = int(input(f"{Colors.CYAN}   Default input token limit (default: 128): {Colors.ENDC}").strip() or "128")
+        config['benchmark_iterations'] = int(input(f"{Colors.CYAN}   Number of benchmark iterations (default: 1): {Colors.ENDC}").strip() or "1")
+    else:
+        # Set default values when benchmarking is disabled
+        config['benchmark_memory_consumption'] = '2'
+        config['benchmark_input_tokens'] = 128
+        config['benchmark_iterations'] = 1
 
     return config
 
@@ -1539,14 +1542,6 @@ def find_specific_prompt_file(model_name: str, prompt_folder: Path) -> Optional[
                 best_match = prompt_file
 
     return best_match
-
-    """Creates a directory to store benchmark logs for the current session."""
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    session_name = f"benchmark_session_{timestamp}"
-    session_path = base_path / session_name
-    session_path.mkdir(exist_ok=True, parents=True)
-    
-    return {"SessionName": session_name, "SessionPath": session_path, "Timestamp": timestamp}
 
 def invoke_in_activated_environment(setup_info, command: list, working_directory: Path, log_file: Path):
     """
