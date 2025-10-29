@@ -99,5 +99,3 @@ from endend import main as main_workflow
 
 if __name__ == "__main__":
     run_with_memory_monitoring(main_workflow)
-    # Replace main() with memory monitoring wrapper
-    run_with_memory_monitoring(main)
