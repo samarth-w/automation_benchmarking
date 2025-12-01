@@ -5,9 +5,26 @@ import importlib.util
 
 # --- ENSURE PROXY IS SET UP EARLY, BEFORE ANY NETWORK OPERATIONS ---
 PROXY_URL = "http://proxy-iind.intel.com:911"
-if os.environ.get("HTTP_PROXY") != PROXY_URL or os.environ.get("HTTPS_PROXY") != PROXY_URL:
-    os.environ["HTTP_PROXY"] = PROXY_URL
-    os.environ["HTTPS_PROXY"] = PROXY_URL
+
+def prompt_for_proxy_configuration(proxy_url: str) -> bool:
+    """Ask the user whether to configure the corporate proxy for this session."""
+    current_http = os.environ.get("HTTP_PROXY")
+    current_https = os.environ.get("HTTPS_PROXY")
+    if current_http == proxy_url and current_https == proxy_url:
+        print(f"Proxy already configured: {proxy_url}")
+        return True
+
+    response = input(f"Configure proxy at {proxy_url} for this session? [Y/n]: ").strip().lower()
+    if response in ("", "y", "yes"):
+        os.environ["HTTP_PROXY"] = proxy_url
+        os.environ["HTTPS_PROXY"] = proxy_url
+        print(f"Proxy enabled for this session: {proxy_url}")
+        return True
+
+    print("Proxy configuration skipped per user choice.")
+    return False
+
+PROXY_USER_OPT_IN = prompt_for_proxy_configuration(PROXY_URL)
 
 
 
@@ -470,7 +487,7 @@ def run_command(command_str, working_directory=None, stop_on_error=True, env=Non
                 print(e.stderr)
         return False
 
-def test_software(name, version_command, install_instructions):
+def test_software(name, version_command, install_instructions, install_package_id=None):
     """Checks if a software is installed by running a version command."""
     print(f"\n{Colors.CYAN}Checking for {name} installation...{Colors.ENDC}")
     try:
@@ -485,8 +502,74 @@ def test_software(name, version_command, install_instructions):
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         print(f"{Colors.RED}{name} not found or version check failed.{Colors.ENDC}")
+        if install_package_id:
+            print(f"{Colors.YELLOW}Attempting to install {name} via winget...{Colors.ENDC}")
+            if install_with_winget(install_package_id, name):
+                return test_software(name, version_command, install_instructions)
         print(f"{Colors.YELLOW}Please install {name} manually. {install_instructions}{Colors.ENDC}")
         return False
+
+def is_winget_available() -> bool:
+    """Return True if the winget executable is available on the PATH."""
+    return shutil.which("winget") is not None
+
+def install_with_winget(package_id: str, friendly_name: str) -> bool:
+    """Attempts to install a package from winget by ID."""
+    if not is_winget_available():
+        print(f"{Colors.YELLOW}Winget is not available. Please install {friendly_name} manually via {package_id}.{Colors.ENDC}")
+        return False
+
+    command = [
+        "winget", "install", "--id", package_id,
+        "-e", "--accept-package-agreements", "--accept-source-agreements"
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"{Colors.GREEN}{friendly_name} installed (or already present).{Colors.ENDC}")
+            if result.stdout:
+                print(result.stdout)
+            return True
+        print(f"{Colors.RED}Winget reported an error while installing {friendly_name}.{Colors.ENDC}")
+        if result.stderr:
+            print(result.stderr)
+        return False
+    except Exception as e:
+        print(f"{Colors.RED}Failed to invoke winget: {e}{Colors.ENDC}")
+        return False
+
+def is_winget_package_installed(package_id: str) -> bool:
+    """Checks via winget list whether the requested package ID is already installed."""
+    if not is_winget_available():
+        return False
+    try:
+        result = subprocess.run(["winget", "list", "--id", package_id], capture_output=True, text=True)
+        output = (result.stdout + result.stderr).lower()
+        if "no installed package found matching input criteria" in output:
+            return False
+        return package_id.lower() in output
+    except Exception:
+        return False
+
+def ensure_vc_redists_installed() -> bool:
+    """Ensure that the required VC++ redistributables are installed via winget."""
+    packages = [
+        ("Microsoft.VCRedist.2015+.x64", "Microsoft Visual C++ v14 Redistributable (x64)"),
+        ("Microsoft.VCRedist.2015+.x86", "Microsoft Visual C++ v14 Redistributable (x86)")
+    ]
+
+    installed_any = False
+    for package_id, friendly_name in packages:
+        if is_winget_package_installed(package_id):
+            print(f"{Colors.GREEN}{friendly_name} already installed (verified via winget).{Colors.ENDC}")
+            installed_any = True
+            continue
+
+        print(f"{Colors.YELLOW}Attempting to install {friendly_name} via winget...{Colors.ENDC}")
+        if install_with_winget(package_id, friendly_name):
+            installed_any = True
+
+    return installed_any
 
 def test_openvino_repository(repo_path="openvino.genai"):
     """Validates the local OpenVINO GenAI git repository with minimal verbosity."""
@@ -1171,23 +1254,31 @@ def quantize_model(model_id: str, quantization: str, device: str, output_dir: Pa
         "-m", model_id,
         "--weight-format", "int4",
         "--group-size", group_size,
-        "--ratio", "1.0"
+        "--ratio", "1.0",
+        "--trust-remote-code"
     ] + sym_flag + [str(output_path)]
     
     print(f"\n{Colors.CYAN}Quantizing {device.upper()} model: {model_id}{Colors.ENDC}")
     print(f"{Colors.GRAY}Output: {output_path}{Colors.ENDC}")
+    print(f"{Colors.GRAY}Command: {' '.join(command)}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}This may take several minutes to download and quantize the model...{Colors.ENDC}")
     
     # Set up environment
     env = os.environ.copy()
     if hf_token:
         env['HF_TOKEN'] = hf_token
+        env['HUGGINGFACE_HUB_TOKEN'] = hf_token  # Some models check this variable
     
-    # Run in virtual environment
-    success = run_in_activated_environment(
-        venv_path=venv_path,
-        command=command,
+    # Ensure environment variables for HF are set
+    env['HF_HUB_ENABLE_HF_TRANSFER'] = '0'  # Disable HF transfer for stability
+    
+    # Run in virtual environment with verbose output for debugging
+    success = run_command(
+        command_str=f'call "{Path(venv_path) / "Scripts" / "activate.bat"}" && {" ".join(command)}',
         working_directory=llm_bench_path,
-        env_vars=env
+        stop_on_error=False,
+        env=env,
+        verbose=True
     )
     
     if success:
@@ -1851,26 +1942,36 @@ def main():
     
     print(f"\n{Colors.CYAN}STEP 1: Checking proxy configuration...{Colors.ENDC}")
     
-    if os.getenv("HTTP_PROXY") != proxy_url or os.getenv("HTTPS_PROXY") != proxy_url:
-        print(f"{Colors.YELLOW}Proxy not configured. Setting up permanent proxy configuration...{Colors.ENDC}")
-        if not set_proxy_permanently(proxy_url):
-            print(f"{Colors.RED}Failed to set proxy configuration. Please set manually and rerun the script.{Colors.ENDC}")
-            sys.exit(1)
+    if PROXY_USER_OPT_IN:
+        if os.getenv("HTTP_PROXY") != proxy_url or os.getenv("HTTPS_PROXY") != proxy_url:
+            print(f"{Colors.YELLOW}Proxy not configured. Setting up permanent proxy configuration...{Colors.ENDC}")
+            if not set_proxy_permanently(proxy_url):
+                print(f"{Colors.RED}Failed to set proxy configuration. Please set manually and rerun the script.{Colors.ENDC}")
+                sys.exit(1)
+        else:
+            print(f"{Colors.GREEN}Proxy already configured correctly. Continuing...{Colors.ENDC}")
     else:
-        print(f"{Colors.GREEN}Proxy already configured correctly. Continuing...{Colors.ENDC}")
+        print(f"{Colors.YELLOW}Proxy configuration was skipped per user preference. Continuing without proxy setup.{Colors.ENDC}")
         
     # --- STEP 2: CHECK SOFTWARE DEPENDENCIES ---
     print(f"\n{Colors.CYAN}STEP 2: Checking software dependencies...{Colors.ENDC}")
     
     if not test_software("Python", ["python", "--version"], "Download from https://www.python.org/downloads/windows/ and ensure it's added to PATH."):
         sys.exit(1)
-        
-    if not test_software("Git", ["git", "--version"], "Download from https://git-scm.com/download/win and ensure it's added to PATH."):
+    if not test_software(
+        "Git",
+        ["git", "--version"],
+        "Use `winget install --id Git.Git` or download from https://git-scm.com/download/win and ensure it's added to PATH.",
+        install_package_id="Git.Git"
+    ):
         sys.exit(1)
 
     print(f"\n{Colors.YELLOW}VC++ Redistributables Check:{Colors.ENDC}")
     print(f"{Colors.YELLOW}It's highly recommended to have the latest Microsoft Visual C++ Redistributable (x64) installed.{Colors.ENDC}")
     print(f"{Colors.YELLOW}Download from: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170{Colors.ENDC}")
+
+    if not ensure_vc_redists_installed():
+        print(f"{Colors.YELLOW}Some Visual C++ Redistributable installs failed. Please install them manually if you encounter issues, but the script will continue.{Colors.ENDC}")
     
     # --- STEP 3: PULL OPENVINO GENAI REPOSITORY ---
     print(f"\n{Colors.CYAN}STEP 3: Setting up OpenVINO GenAI repository...{Colors.ENDC}")
@@ -1939,13 +2040,13 @@ def main():
     else:
         print(f"{Colors.YELLOW}Warning: requirements.txt not found at '{requirements_file_path}'{Colors.ENDC}")
         
-    print(f"\n{Colors.YELLOW}Installing OpenVINO packages in activated environment...{Colors.ENDC}")
-    openvino_packages_cmd = ["pip", "install", "--pre", "openvino", "openvino-tokenizers", "openvino-genai", "--extra-index-url", "https://storage.openvinotoolkit.org/simple/wheels/nightly", "--upgrade"]
-    run_in_activated_environment(
-        venv_path=str(venv_path),
-        command=openvino_packages_cmd,
-        working_directory=str(llm_bench_path)
-    )
+    # print(f"\n{Colors.YELLOW}Installing OpenVINO packages in activated environment...{Colors.ENDC}")
+    # openvino_packages_cmd = ["pip", "install", "--pre", "openvino", "openvino-tokenizers", "openvino-genai", "--extra-index-url", "https://storage.openvinotoolkit.org/simple/wheels/nightly", "--upgrade"]
+    # run_in_activated_environment(
+        # venv_path=str(venv_path),
+        # command=openvino_packages_cmd,
+        # working_directory=str(llm_bench_path)
+    # )
     
     # Install additional packages for model management
     print(f"\n{Colors.YELLOW}Installing model management packages...{Colors.ENDC}")
