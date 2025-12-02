@@ -1160,11 +1160,24 @@ def get_all_openvino_models(models_folder: Path):
         # Check for required OpenVINO files
         if not all((item / f).exists() for f in ['openvino_model.xml', 'openvino_model.bin', 'config.json']):
             continue
+        
         folder_name = item.name.lower()
+        folder_parts = folder_name.split('_')
+        
+        # Detect precision
         precision = next((p for p in ['int4', 'int8', 'fp16', 'fp32'] if p in folder_name), 'unknown')
-        method = 'channel_wise' if 'cw' in folder_name.split('_') else ('group_wise' if 'gw' in folder_name.split('_') else 'unknown')
+        
+        # Detect method
+        if 'cw' in folder_parts or 'cwq' in folder_name:
+            method = 'channel_wise'
+        elif 'gw' in folder_parts or 'awq' in folder_name:
+            method = 'group_wise'
+        else:
+            method = 'unknown'
+        
         model_info = {
-            'path': item, 'name': item.name,
+            'path': item,
+            'name': item.name,
             'quantization': {'precision': precision, 'method': method},
             'size_mb': sum(f.stat().st_size for f in item.glob('*') if f.is_file()) / (1024*1024)
         }
