@@ -1,7 +1,6 @@
-
 # Automation Benchmarking Scripts
 
-This repository provides two Python scripts for automated benchmarking and memory profiling of OpenVINO GenAI models. These tools help you set up models, run quantization, perform comprehensive benchmarks, and monitor memory usage in detail.
+This repository provides two Python scripts for automated benchmarking and memory profiling of OpenVINO GenAI models. These tools help you set up models, run quantization, perform comprehensive benchmarking, and generate detailed reports.
 
 ## Files
 
@@ -27,6 +26,8 @@ This repository provides two Python scripts for automated benchmarking and memor
 - **Advanced Memory Monitoring:**  
   - Tracks memory usage for main and child processes in real time.
   - Reports peak memory usage and per-process stats in the terminal.
+- **Automated Execution Mode:**  
+  - Run the entire workflow unattended using a YAML configuration file.
 
 ---
 
@@ -65,6 +66,81 @@ This repository provides two Python scripts for automated benchmarking and memor
 
 ---
 
+## Automated Execution with YAML Configuration
+
+For unattended or CI/CD workflows, both scripts support a `--config` flag that accepts a YAML configuration file. This allows you to define all settings upfront and run the entire pipeline without interactive prompts.
+
+### Command Line Usage
+
+```bash
+python endend.py --config CONFIG
+```
+
+| Argument | Description |
+|----------|-------------|
+| `--config CONFIG` | Path to YAML configuration file for automated execution |
+
+### Example YAML Configuration File
+
+```yaml
+# config.yaml - Example configuration for automated benchmarking
+
+# Proxy settings (optional)
+proxy:
+  enable: false
+  url: "http://proxy.example.com:8080"
+
+# Hugging Face authentication
+hugging_face:
+  token: "hf_your_token_here"
+
+# Target device(s) for benchmarking
+device:
+  target: "both"  # Options: "gpu", "npu", "both"
+
+# Models to process
+models:
+  list:
+    - "meta-llama/Llama-3.1-8B"
+    - "google/gemma-2-2b-it"
+  quantization: "groupwise"  # Options: "groupwise", "channelwise", "both"
+
+# Virtual environment settings
+virtual_environment:
+  name: "openvino_env"
+  use_existing: true
+
+# Benchmarking configuration
+benchmarking:
+  enable: true
+  general_prompt_file: "prompts/general.jsonl"
+  specific_prompt_folder: "prompts/model_specific/"
+  config_file: "configs/benchmark_config.json"
+  input_tokens: 128
+  iterations: 3
+```
+
+### Configuration Options Explained
+
+| Section | Key | Description | Default |
+|---------|-----|-------------|---------|
+| `proxy` | `enable` | Enable corporate proxy for network requests | `false` |
+| `proxy` | `url` | Proxy server URL | - |
+| `hugging_face` | `token` | HF token for accessing gated models (Llama, Gemma, etc.) | - |
+| `device` | `target` | Target device(s): `gpu`, `npu`, or `both` | `both` |
+| `models` | `list` | List of Hugging Face model IDs to process | - |
+| `models` | `quantization` | Quantization type: `groupwise`, `channelwise`, or `both` | `groupwise` |
+| `virtual_environment` | `name` | Name of the Python virtual environment | `openvino_env` |
+| `virtual_environment` | `use_existing` | Reuse existing environment if valid | `true` |
+| `benchmarking` | `enable` | Run benchmarks after model processing | `true` |
+| `benchmarking` | `general_prompt_file` | Path to general prompt file (JSONL/TXT) | - |
+| `benchmarking` | `specific_prompt_folder` | Folder with model-specific prompt files | - |
+| `benchmarking` | `config_file` | Path to benchmark configuration file | - |
+| `benchmarking` | `input_tokens` | Number of input tokens for benchmarking | `128` |
+| `benchmarking` | `iterations` | Number of benchmark iterations per model | `1` |
+
+---
+
 ## Requirements
 
 - Python 3.10+
@@ -95,6 +171,7 @@ This repository provides two Python scripts for automated benchmarking and memor
 - For large model batches, use a text file with model IDs.
 - If you encounter permission errors, check file paths and access rights.
 - For advanced memory analysis, use the `.DMP` files with WinDbg and pykd (see documentation).
+- When using `--config`, ensure your YAML file is properly formatted and all paths are valid.
 
 ---
 
@@ -110,11 +187,15 @@ This repository provides two Python scripts for automated benchmarking and memor
    pip install -r requirements.txt
    pip install memory_profiler psutil
    ```
-3. Run the benchmarking script:
+3. Run the benchmarking script (interactive mode):
    ```bash
    python endend.py
    ```
-4. For memory profiling:
+4. Run with automated configuration:
+   ```bash
+   python endend.py --config my_config.yaml
+   ```
+5. For memory profiling:
    ```bash
    python endend_memmon.py
    ```
