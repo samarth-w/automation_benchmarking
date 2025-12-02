@@ -1145,87 +1145,31 @@ def process_models(config: Dict, folders: Dict, venv_path: str, llm_bench_path: 
 # Benchmarking Functions
 # -----------------------------------------------------------------------------
 
-def detect_openvino_model_type(model_folder: Path):
-    """
-    Detect OpenVINO model type by analyzing folder contents and name.
-    Returns dict with model info or None if not a valid OpenVINO model.
-    """
-    required_files = [
-        'openvino_model.xml',
-        'openvino_model.bin',
-        'config.json'
-    ]
-    
-    # Check if all required OpenVINO files exist
-    missing_files = [f for f in required_files if not (model_folder / f).exists()]
-    if missing_files:
-        return None
-    
-    folder_name = model_folder.name.lower()
-    
-    # Detect quantization type from folder name
-    quantization_info = {
-        'precision': 'unknown',
-        'method': 'unknown',
-        'group_size': 'unknown'
-    }
-    
-    # Precision detection
-    if 'int4' in folder_name:
-        quantization_info['precision'] = 'int4'
-    elif 'int8' in folder_name:
-        quantization_info['precision'] = 'int8'
-    elif 'fp16' in folder_name:
-        quantization_info['precision'] = 'fp16'
-    elif 'fp32' in folder_name:
-        quantization_info['precision'] = 'fp32'
-    
-    # Method detection
-    if 'awq' in folder_name:
-        quantization_info['method'] = 'awq'
-    elif 'cwq' in folder_name or 'cw' in folder_name.split('_'):
-        quantization_info['method'] = 'channel_wise'
-    elif 'gw' in folder_name.split('_'):
-        quantization_info['method'] = 'group_wise'
-    elif 'datafree' in folder_name:
-        quantization_info['method'] = 'datafree'
-    
-    # Group size detection
-    if '_128' in folder_name:
-        quantization_info['group_size'] = '128'
-    elif '_64' in folder_name:
-        quantization_info['group_size'] = '64'
-    elif '_32' in folder_name:
-        quantization_info['group_size'] = '32'
-    
-    return {
-        'path': model_folder,
-        'name': model_folder.name,
-        'is_quantized': quantization_info['precision'] in ['int4', 'int8'],
-        'quantization': quantization_info,
-        'size_mb': sum(f.stat().st_size for f in model_folder.glob('*') if f.is_file()) / (1024*1024)
-    }
-
 def get_all_openvino_models(models_folder: Path):
-    """
-    Find all OpenVINO models in the folder and categorize them.
-    """
+    """Find all OpenVINO models in the folder."""
     if not models_folder.exists():
         print(f"{Colors.RED}Models folder path not found: {models_folder}{Colors.ENDC}")
         return []
     
     print(f"\n{Colors.CYAN}Scanning for OpenVINO models in: {models_folder}{Colors.ENDC}")
-    
     all_models = []
     
     for item in models_folder.iterdir():
         if not item.is_dir():
             continue
-            
-        model_info = detect_openvino_model_type(item)
-        if model_info:
-            all_models.append(model_info)
-            print(f"{Colors.GREEN}✓ Found: {model_info['name']} ({model_info['quantization']['precision']}){Colors.ENDC}")
+        # Check for required OpenVINO files
+        if not all((item / f).exists() for f in ['openvino_model.xml', 'openvino_model.bin', 'config.json']):
+            continue
+        folder_name = item.name.lower()
+        precision = next((p for p in ['int4', 'int8', 'fp16', 'fp32'] if p in folder_name), 'unknown')
+        method = 'channel_wise' if 'cw' in folder_name.split('_') else ('group_wise' if 'gw' in folder_name.split('_') else 'unknown')
+        model_info = {
+            'path': item, 'name': item.name,
+            'quantization': {'precision': precision, 'method': method},
+            'size_mb': sum(f.stat().st_size for f in item.glob('*') if f.is_file()) / (1024*1024)
+        }
+        all_models.append(model_info)
+        print(f"{Colors.GREEN}✓ Found: {model_info['name']} ({precision}){Colors.ENDC}")
     
     print(f"\n{Colors.CYAN}Found {len(all_models)} OpenVINO models total{Colors.ENDC}")
     return all_models
@@ -1593,69 +1537,15 @@ def save_model_management_info(config: Dict, folders: Dict, llm_bench_path: str)
     
     print(f"{Colors.GREEN}Model management info saved to: {info_file}{Colors.ENDC}")
 
-def install_additional_requirements():
-    """Installs additional requirements for model management."""
-    print(f"\n{Colors.CYAN}Installing additional requirements for model management...{Colors.ENDC}")
-    
-    additional_packages = [
-        "requests",
-        "beautifulsoup4", 
-        "packaging"
-    ]
-    
-    for package in additional_packages:
-        result = subprocess.run([sys.executable, "-m", "pip", "install", package], 
-                              capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"{Colors.RED}Failed to install {package}: {result.stderr}{Colors.ENDC}")
-            return False
-    
-    return True
-
 # Main Script Logic
 # -----------------------------------------------------------------------------
 
-def set_proxy_permanently(proxy_url):
-    """Sets the HTTP_PROXY and HTTPS_PROXY environment variables permanently for the current user."""
-    print(f"{Colors.YELLOW}Setting proxy configuration permanently...{Colors.ENDC}")
-    try:
-        os.environ['HTTP_PROXY'] = proxy_url
-        os.environ['HTTPS_PROXY'] = proxy_url
-        print(f"{Colors.GREEN}Proxy set for current session: {proxy_url}{Colors.ENDC}")
-
-        print(f"{Colors.YELLOW}Setting permanent proxy for current user...{Colors.ENDC}")
-        result = subprocess.run(f'setx HTTP_PROXY "{proxy_url}"', shell=True)
-        if result.returncode == 0:
-            result = subprocess.run(f'setx HTTPS_PROXY "{proxy_url}"', shell=True)
-            if result.returncode == 0:
-                print(f"{Colors.GREEN}User-level proxy environment variables set successfully.{Colors.ENDC}")
-            else:
-                print(f"{Colors.RED}Failed to set HTTPS_PROXY variable.{Colors.ENDC}")
-                return False
-        else:
-            print(f"{Colors.RED}Failed to set HTTP_PROXY variable.{Colors.ENDC}")
-            return False
-
-        if get_admin_status():
-            print(f"{Colors.YELLOW}Attempting to set system-wide proxy (requires admin privileges)...{Colors.ENDC}")
-            result = subprocess.run(f'setx HTTP_PROXY "{proxy_url}" /M', shell=True)
-            if result.returncode == 0:
-                result = subprocess.run(f'setx HTTPS_PROXY "{proxy_url}" /M', shell=True)
-                if result.returncode == 0:
-                    print(f"{Colors.GREEN}System-wide proxy environment variables set successfully.{Colors.ENDC}")
-                else:
-                    print(f"{Colors.RED}Failed to set system-wide HTTPS_PROXY.{Colors.ENDC}")
-            else:
-                print(f"{Colors.RED}Failed to set system-wide HTTP_PROXY.{Colors.ENDC}")
-        else:
-            print(f"{Colors.YELLOW}Not running as administrator - system-wide proxy not set.{Colors.ENDC}")
-            print(f"{Colors.CYAN}User-level proxy settings will be sufficient for most applications.{Colors.ENDC}")
-
-        print(f"{Colors.GREEN}Proxy configuration completed successfully!{Colors.ENDC}")
-        return True
-    except Exception as e:
-        print(f"{Colors.RED}Failed to set proxy configuration: {e}{Colors.ENDC}")
-        return False
+def set_proxy_for_session(proxy_url):
+    """Sets the HTTP_PROXY and HTTPS_PROXY environment variables for the current session only."""
+    os.environ['HTTP_PROXY'] = proxy_url
+    os.environ['HTTPS_PROXY'] = proxy_url
+    print(f"{Colors.GREEN}Proxy set for current session: {proxy_url}{Colors.ENDC}")
+    return True
 
 def test_virtual_environment_success(venv_path, working_directory):
     """Verifies that the required packages are installed in the virtual environment."""
@@ -1684,11 +1574,6 @@ def main():
     
     script_dir = Path(__file__).parent
     
-    # Install additional requirements first
-    if not install_additional_requirements():
-        print(f"{Colors.RED}Failed to install additional requirements. Please install manually and rerun.{Colors.ENDC}")
-        sys.exit(1)
-    
     # Get comprehensive configuration upfront
     print(f"\n{Colors.CYAN}Collecting all configuration inputs...{Colors.ENDC}")
     config = get_comprehensive_configuration()
@@ -1703,10 +1588,8 @@ def main():
     
     if PROXY_USER_OPT_IN:
         if os.getenv("HTTP_PROXY") != proxy_url or os.getenv("HTTPS_PROXY") != proxy_url:
-            print(f"{Colors.YELLOW}Proxy not configured. Setting up permanent proxy configuration...{Colors.ENDC}")
-            if not set_proxy_permanently(proxy_url):
-                print(f"{Colors.RED}Failed to set proxy configuration. Please set manually and rerun the script.{Colors.ENDC}")
-                sys.exit(1)
+            print(f"{Colors.YELLOW}Proxy not configured. Setting proxy for current session...{Colors.ENDC}")
+            set_proxy_for_session(proxy_url)
         else:
             print(f"{Colors.GREEN}Proxy already configured correctly. Continuing...{Colors.ENDC}")
     else:
@@ -1806,16 +1689,6 @@ def main():
         # command=openvino_packages_cmd,
         # working_directory=str(llm_bench_path)
     # )
-    
-    # Install additional packages for model management
-    print(f"\n{Colors.YELLOW}Installing model management packages...{Colors.ENDC}")
-    model_mgmt_packages = ["requests", "beautifulsoup4", "packaging"]
-    for package in model_mgmt_packages:
-        run_in_activated_environment(
-            venv_path=str(venv_path),
-            command=["pip", "install", package],
-            working_directory=str(llm_bench_path)
-        )
     
     # --- VERIFICATION ---
     print(f"\n{Colors.CYAN}Verifying installation...{Colors.ENDC}")
