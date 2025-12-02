@@ -88,351 +88,110 @@ if platform.system() != 'Windows':
     print(f"{Colors.RED}This script is intended for Windows PowerShell environments only.{Colors.ENDC}")
     sys.exit(1)
 
-# Enhanced Virtual Environment Management Functions
+# Virtual Environment Management Functions
 # -----------------------------------------------------------------------------
 
 def validate_virtual_environment(venv_path: Path) -> Dict:
     """
-    Comprehensive validation of a virtual environment.
-    Returns detailed information about the environment's state.
+    Validate a virtual environment and return its state.
+    Returns dict with 'valid', 'python_exe', and 'activate_script' keys.
     """
-    validation_result = {
-        'valid': False,
-        'path': venv_path,
-        'issues': [],
-        'python_exe': None,
-        'activate_script': None,
-        'can_repair': False
-    }
-    
-    # Check if directory exists
-    if not venv_path.exists():
-        validation_result['issues'].append("Directory does not exist")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    # Check if it's a directory
+    result = {'valid': False, 'python_exe': None, 'activate_script': None}
     if not venv_path.is_dir():
-        validation_result['issues'].append("Path exists but is not a directory")
-        return validation_result
-    
-    # Check for Scripts directory
+        return result
     scripts_dir = venv_path / "Scripts"
-    if not scripts_dir.exists():
-        validation_result['issues'].append("Scripts directory missing")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    # Check for Python executable
     python_exe = scripts_dir / "python.exe"
-    if not python_exe.exists():
-        validation_result['issues'].append("Python executable missing")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    validation_result['python_exe'] = python_exe
-    
-    # Check for activation script
     activate_script = scripts_dir / "activate.bat"
-    if not activate_script.exists():
-        validation_result['issues'].append("Activation script missing")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    validation_result['activate_script'] = activate_script
-    
-    # Test if Python executable works
+    if not python_exe.exists() or not activate_script.exists():
+        return result
     try:
-        result = subprocess.run(
-            [str(python_exe), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.returncode != 0:
-            validation_result['issues'].append("Python executable is not functional")
-            validation_result['can_repair'] = True
-            return validation_result
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-        validation_result['issues'].append(f"Python executable test failed: {e}")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    # Check for pyvenv.cfg
-    pyvenv_cfg = venv_path / "pyvenv.cfg"
-    if not pyvenv_cfg.exists():
-        validation_result['issues'].append("pyvenv.cfg missing (may indicate corrupted environment)")
-        validation_result['can_repair'] = True
-        return validation_result
-    
-    # If we get here, the environment appears valid
-    validation_result['valid'] = True
-    return validation_result
-
-def find_existing_virtual_environments(llm_bench_path: Path) -> List[Dict]:
-    """
-    Search for existing virtual environments in the LLM bench directory.
-    Returns a list of environment information dictionaries.
-    """
-    print(f"{Colors.CYAN}Searching for existing virtual environments in: {llm_bench_path}{Colors.ENDC}")
-    
-    environments = []
-    
-    try:
-        for item in llm_bench_path.iterdir():
-            if not item.is_dir():
-                continue
-            
-            # Skip obvious non-environment directories
-            skip_dirs = {'models', 'tools', 'src', 'docs', '__pycache__', '.git', 'benchmark_results'}
-            if item.name.lower() in skip_dirs:
-                continue
-            
-            validation = validate_virtual_environment(item)
-            env_info = {
-                'name': item.name,
-                'path': item,
-                'validation': validation,
-                'priority': 0
-            }
-            
-            # Assign priority based on name patterns
-            name_lower = item.name.lower()
-            if 'openvino' in name_lower:
-                env_info['priority'] = 100
-            elif any(keyword in name_lower for keyword in ['venv', 'env']):
-                env_info['priority'] = 50
-            elif name_lower.startswith('llm'):
-                env_info['priority'] = 30
-            else:
-                env_info['priority'] = 10
-            
-            environments.append(env_info)
-    
-    except Exception as e:
-        print(f"{Colors.RED}Error scanning for virtual environments: {e}{Colors.ENDC}")
-        return []
-    
-    # Sort by priority (highest first) then by name
-    environments.sort(key=lambda x: (-x['priority'], x['name']))
-    
-    return environments
-
-def display_valid_environment_options(valid_environments: List[Dict]) -> None:
-    """Display available virtual environments in a user-friendly format."""
-    print(f"\n{Colors.CYAN}Available Virtual Environments:{Colors.ENDC}")
-    print(f"{Colors.WHITE}{'#':<3} {'Name':<25} {'Path'}{Colors.ENDC}")
-    print(f"{Colors.WHITE}{'-'*75}{Colors.ENDC}")
-    
-    for i, env in enumerate(valid_environments, 1):
-        print(f"{Colors.WHITE}{i:<3} {env['name']:<25} {Colors.GRAY}{env['path']}{Colors.ENDC}")
-
-def prompt_for_environment_choice(environments: List[Dict], default_name: str) -> Dict:
-    """
-    Prompt user to choose an environment or create a new one.
-    Returns environment choice information.
-    """
-    valid_environments = [env for env in environments if env['validation']['valid']]
-    
-    print(f"\n{Colors.YELLOW}Virtual Environment Options:{Colors.ENDC}")
-    
-    if valid_environments:
-        display_valid_environment_options(valid_environments)
-        create_new_option_num = len(valid_environments) + 1
-        print(f"\n{Colors.WHITE}{create_new_option_num}. Create new environment (default: {default_name}){Colors.ENDC}")
-        
-        while True:
-            choice = input(f"{Colors.CYAN}Enter your choice (1-{create_new_option_num}, default: {create_new_option_num}): {Colors.ENDC}").strip()
-            
-            if not choice or choice == str(create_new_option_num):
-                # Create new environment
-                env_name = input(f"{Colors.CYAN}Enter environment name (default: {default_name}): {Colors.ENDC}").strip()
-                if not env_name:
-                    env_name = default_name
-                return {'action': 'create', 'name': env_name, 'path': None}
-            
-            try:
-                choice_idx = int(choice) - 1
-                if 0 <= choice_idx < len(valid_environments):
-                    selected_env = valid_environments[choice_idx]
-                    return {
-                        'action': 'use_existing',
-                        'name': selected_env['name'],
-                        'path': selected_env['path'],
-                        'validation': selected_env['validation']
-                    }
-                else:
-                    print(f"{Colors.RED}Invalid choice. Please enter a number between 1 and {create_new_option_num}.{Colors.ENDC}")
-            except ValueError:
-                print(f"{Colors.RED}Invalid input. Please enter a number.{Colors.ENDC}")
-    else:
-        print(f"{Colors.YELLOW}No existing virtual environments found.{Colors.ENDC}")
-        env_name = input(f"{Colors.CYAN}Enter environment name (default: {default_name}): {Colors.ENDC}").strip()
-        if not env_name:
-            env_name = default_name
-        return {'action': 'create', 'name': env_name, 'path': None}
-
-def repair_virtual_environment(venv_path: Path, llm_bench_path: Path) -> bool:
-    """
-    Attempt to repair a corrupted virtual environment.
-    """
-    print(f"\n{Colors.YELLOW}Attempting to repair virtual environment: {venv_path.name}{Colors.ENDC}")
-    
-    # First, try to backup any user content
-    backup_successful = False
-    try:
-        # Look for common user files that might be worth preserving
-        user_files = []
-        for pattern in ['*.py', '*.txt', '*.md', '*.json']:
-            user_files.extend(venv_path.glob(pattern))
-        
-        if user_files:
-            backup_dir = llm_bench_path / f"backup_{venv_path.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            backup_dir.mkdir(exist_ok=True)
-            
-            for file in user_files:
-                shutil.copy2(file, backup_dir)
-            
-            print(f"{Colors.GREEN}User files backed up to: {backup_dir}{Colors.ENDC}")
-            backup_successful = True
-    except Exception as e:
-        print(f"{Colors.YELLOW}Could not backup user files: {e}{Colors.ENDC}")
-    
-    # Remove the corrupted environment
-    try:
-        shutil.rmtree(venv_path)
-        print(f"{Colors.GREEN}Removed corrupted environment{Colors.ENDC}")
-    except Exception as e:
-        print(f"{Colors.RED}Failed to remove corrupted environment: {e}{Colors.ENDC}")
-        return False
-    
-    # Recreate the environment
-    return create_virtual_environment(venv_path.name, llm_bench_path)
-
-def create_virtual_environment(env_name: str, llm_bench_path: Path) -> bool:
-    """
-    Create a new virtual environment with comprehensive error handling.
-    """
-    venv_path = llm_bench_path / env_name
-    
-    print(f"\n{Colors.YELLOW}Creating virtual environment: {env_name}{Colors.ENDC}")
-    print(f"{Colors.GRAY}Location: {venv_path}{Colors.ENDC}")
-    
-    # Check if the directory already exists
-    if venv_path.exists():
-        print(f"{Colors.YELLOW}Directory already exists. Checking if it can be used...{Colors.ENDC}")
-        validation = validate_virtual_environment(venv_path)
-        
-        if validation['valid']:
-            print(f"{Colors.GREEN}Existing environment is valid and will be used.{Colors.ENDC}")
-            return True
-        elif validation['can_repair']:
-            repair_choice = input(f"{Colors.CYAN}Existing environment has issues. Attempt repair? (y/n): {Colors.ENDC}").strip().lower()
-            if repair_choice == 'y':
-                return repair_virtual_environment(venv_path, llm_bench_path)
-        
-        # If we can't repair, ask to overwrite
-        overwrite_choice = input(f"{Colors.CYAN}Remove existing directory and create new environment? (y/n): {Colors.ENDC}").strip().lower()
-        if overwrite_choice != 'y':
-            print(f"{Colors.RED}Cannot proceed without resolving the existing directory.{Colors.ENDC}")
-            return False
-        
-        try:
-            shutil.rmtree(venv_path)
-            print(f"{Colors.GREEN}Existing directory removed.{Colors.ENDC}")
-        except Exception as e:
-            print(f"{Colors.RED}Failed to remove existing directory: {e}{Colors.ENDC}")
-            return False
-    
-    # Create the virtual environment
-    try:
-        print(f"{Colors.YELLOW}Creating virtual environment...{Colors.ENDC}")
-        result = subprocess.run(
-            ["python", "-m", "venv", str(venv_path)],
-            cwd=llm_bench_path,
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
-        
-        if result.returncode != 0:
-            print(f"{Colors.RED}Failed to create virtual environment:{Colors.ENDC}")
-            print(f"{Colors.RED}STDOUT: {result.stdout}{Colors.ENDC}")
-            print(f"{Colors.RED}STDERR: {result.stderr}{Colors.ENDC}")
-            return False
-        
-        print(f"{Colors.GREEN}Virtual environment created successfully.{Colors.ENDC}")
-        
-    except subprocess.TimeoutExpired:
-        print(f"{Colors.RED}Virtual environment creation timed out.{Colors.ENDC}")
-        return False
-    except Exception as e:
-        print(f"{Colors.RED}Error creating virtual environment: {e}{Colors.ENDC}")
-        return False
-    
-    # Validate the newly created environment
-    validation = validate_virtual_environment(venv_path)
-    if not validation['valid']:
-        print(f"{Colors.RED}Newly created environment failed validation:{Colors.ENDC}")
-        for issue in validation['issues']:
-            print(f"{Colors.RED}  - {issue}{Colors.ENDC}")
-        return False
-    
-    print(f"{Colors.GREEN}Virtual environment validation passed.{Colors.ENDC}")
-    return True
+        proc = subprocess.run([str(python_exe), "--version"], capture_output=True, timeout=10)
+        if proc.returncode != 0:
+            return result
+    except Exception:
+        return result
+    result.update({'valid': True, 'python_exe': python_exe, 'activate_script': activate_script})
+    return result
 
 def setup_virtual_environment(llm_bench_path: Path) -> Optional[Path]:
     """
-    Main function to handle virtual environment setup with robust error handling.
+    Set up a virtual environment: find existing ones, prompt user, or create new.
     Returns the path to the validated virtual environment or None if setup failed.
     """
     print(f"\n{Colors.CYAN}{'='*60}{Colors.ENDC}")
     print(f"{Colors.CYAN}VIRTUAL ENVIRONMENT SETUP{Colors.ENDC}")
     print(f"{Colors.CYAN}{'='*60}{Colors.ENDC}")
-    
-    # Default environment name
     default_env_name = "openvino_env"
-    
-    # Search for existing environments
-    existing_environments = find_existing_virtual_environments(llm_bench_path)
-    
-    # Get user choice
-    choice = prompt_for_environment_choice(existing_environments, default_env_name)
-    
-    if choice['action'] == 'create':
-        # Create new environment
-        env_name = choice['name']
-        venv_path = llm_bench_path / env_name
-        
-        if create_virtual_environment(env_name, llm_bench_path):
+    skip_dirs = {'models', 'tools', 'src', 'docs', '__pycache__', '.git', 'benchmark_results'}
+
+    # Find valid existing environments
+    valid_envs = []
+    try:
+        for item in llm_bench_path.iterdir():
+            if item.is_dir() and item.name.lower() not in skip_dirs:
+                if validate_virtual_environment(item)['valid']:
+                    valid_envs.append(item)
+    except Exception:
+        pass
+    valid_envs.sort(key=lambda p: (0 if 'openvino' in p.name.lower() else 1, p.name))
+
+    # Prompt user
+    if valid_envs:
+        print(f"\n{Colors.CYAN}Available Virtual Environments:{Colors.ENDC}")
+        for i, env in enumerate(valid_envs, 1):
+            print(f"{Colors.WHITE}{i}. {env.name} ({env}){Colors.ENDC}")
+        create_opt = len(valid_envs) + 1
+        print(f"{Colors.WHITE}{create_opt}. Create new environment (default: {default_env_name}){Colors.ENDC}")
+        while True:
+            choice = input(f"{Colors.CYAN}Enter choice (1-{create_opt}, default {create_opt}): {Colors.ENDC}").strip()
+            if not choice or choice == str(create_opt):
+                break
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(valid_envs):
+                    print(f"{Colors.GREEN}Using existing environment: {valid_envs[idx].name}{Colors.ENDC}")
+                    return valid_envs[idx]
+            except ValueError:
+                pass
+            print(f"{Colors.RED}Invalid choice.{Colors.ENDC}")
+    else:
+        print(f"{Colors.YELLOW}No existing virtual environments found.{Colors.ENDC}")
+
+    # Create new environment
+    env_name = input(f"{Colors.CYAN}Enter environment name (default: {default_env_name}): {Colors.ENDC}").strip() or default_env_name
+    venv_path = llm_bench_path / env_name
+
+    # Handle existing directory
+    if venv_path.exists():
+        if validate_virtual_environment(venv_path)['valid']:
+            print(f"{Colors.GREEN}Existing environment is valid.{Colors.ENDC}")
             return venv_path
-        else:
-            print(f"{Colors.RED}Failed to create virtual environment.{Colors.ENDC}")
+        overwrite = input(f"{Colors.CYAN}Directory exists but is broken. Overwrite? (y/n): {Colors.ENDC}").strip().lower()
+        if overwrite != 'y':
+            print(f"{Colors.RED}Cannot proceed without a valid environment.{Colors.ENDC}")
             return None
-    
-    elif choice['action'] == 'use_existing':
-        # Use existing environment
-        venv_path = choice['path']
-        validation = choice['validation']
-        
-        if validation['valid']:
-            print(f"{Colors.GREEN}Using existing valid environment: {choice['name']}{Colors.ENDC}")
-            return venv_path
-        else:
-            print(f"{Colors.YELLOW}Selected environment has issues:{Colors.ENDC}")
-            for issue in validation['issues']:
-                print(f"{Colors.YELLOW}  - {issue}{Colors.ENDC}")
-            
-            if validation['can_repair']:
-                repair_choice = input(f"{Colors.CYAN}Attempt to repair this environment? (y/n): {Colors.ENDC}").strip().lower()
-                if repair_choice == 'y':
-                    if repair_virtual_environment(venv_path, llm_bench_path):
-                        return venv_path
-            
-            print(f"{Colors.RED}Cannot use selected environment. Please choose a different option.{Colors.ENDC}")
-            return setup_virtual_environment(llm_bench_path)  # Recursive call to restart selection
-    
-    return None
+        try:
+            shutil.rmtree(venv_path)
+        except Exception as e:
+            print(f"{Colors.RED}Failed to remove directory: {e}{Colors.ENDC}")
+            return None
+
+    # Create venv
+    print(f"{Colors.YELLOW}Creating virtual environment: {env_name}{Colors.ENDC}")
+    try:
+        proc = subprocess.run(["python", "-m", "venv", str(venv_path)], cwd=llm_bench_path, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            print(f"{Colors.RED}Failed to create venv: {proc.stderr}{Colors.ENDC}")
+            return None
+    except Exception as e:
+        print(f"{Colors.RED}Error creating venv: {e}{Colors.ENDC}")
+        return None
+
+    if not validate_virtual_environment(venv_path)['valid']:
+        print(f"{Colors.RED}Created environment failed validation.{Colors.ENDC}")
+        return None
+    print(f"{Colors.GREEN}Virtual environment created successfully.{Colors.ENDC}")
+    return venv_path
 
 # Helper Functions
 # -----------------------------------------------------------------------------
