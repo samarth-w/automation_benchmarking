@@ -1,0 +1,40 @@
+# Automation Configuration for OpenVINO Benchmarking
+# Usage: python endend.py --config config.yaml
+
+proxy:
+  enable: true
+  url: "http://proxy-iind.intel.com:911"
+
+virtual_environment:
+  # Name of the folder for the virtual environment
+  name: "test_venv"
+  # If true, uses existing env if valid. If false, recreates it.
+  use_existing: true
+
+hugging_face:
+  # Required for gated models (Llama, Gemma, etc.)
+  token: "YOUR_HF_TOKEN_HERE"
+
+device:
+  # Options: "gpu", "npu", "both"
+  target: "both"
+
+models:
+  # List of Hugging Face model IDs
+  list:
+    - "google/gemma-2-2b-it"
+    # - "meta-llama/Llama-3.1-8B"
+  
+  # Options: "groupwise", "channelwise", "both"
+  quantization: "both"
+
+benchmarking:
+  enable: true
+  # Run settings
+  iterations: 1
+  input_tokens: 128
+  
+  # Optional paths (leave empty to skip)
+  general_prompt_file: ""      # e.g., "prompts.jsonl"
+  specific_prompt_folder: ""   # Path to folder
+  config_file: ""             # e.g., "benchmark_config.json"
