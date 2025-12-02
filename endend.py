@@ -26,11 +26,6 @@ def prompt_for_proxy_configuration(proxy_url: str) -> bool:
 
 PROXY_USER_OPT_IN = prompt_for_proxy_configuration(PROXY_URL)
 
-
-
-
-
-
 # --- Bootstrap Dependency Checker ---
 def check_and_install_dependencies():
     """
