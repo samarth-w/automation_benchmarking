@@ -108,7 +108,7 @@ def validate_virtual_environment(venv_path: Path) -> Dict:
         proc = subprocess.run([str(python_exe), "--version"], capture_output=True, timeout=10)
         if proc.returncode != 0:
             return result
-    except Exception:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return result
     result.update({'valid': True, 'python_exe': python_exe, 'activate_script': activate_script})
     return result
@@ -131,7 +131,7 @@ def setup_virtual_environment(llm_bench_path: Path) -> Optional[Path]:
             if item.is_dir() and item.name.lower() not in skip_dirs:
                 if validate_virtual_environment(item)['valid']:
                     valid_envs.append(item)
-    except Exception:
+    except (PermissionError, OSError):
         pass
     valid_envs.sort(key=lambda p: (0 if 'openvino' in p.name.lower() else 1, p.name))
 
@@ -183,7 +183,7 @@ def setup_virtual_environment(llm_bench_path: Path) -> Optional[Path]:
         if proc.returncode != 0:
             print(f"{Colors.RED}Failed to create venv: {proc.stderr}{Colors.ENDC}")
             return None
-    except Exception as e:
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         print(f"{Colors.RED}Error creating venv: {e}{Colors.ENDC}")
         return None
 
