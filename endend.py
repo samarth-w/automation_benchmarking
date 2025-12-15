@@ -1079,49 +1079,62 @@ def quantize_model(model_id: str, quantization: str, device: str, output_dir: Pa
     # Build command
     group_size = "-1" if quantization == "channelwise" else "128"
     
-    command = [
+    # Base command without the --trust-remote-code flag (try this first)
+    base_command = [
         "optimum-cli", "export", "openvino",
         "-m", model_id,
         "--weight-format", "int4",
         "--group-size", group_size,
-        "--ratio", "1.0",
-        "--trust-remote-code"
+        "--ratio", "1.0"
     ] + sym_flag + [str(output_path)]
-    
+
+    # Command with --trust-remote-code to retry if the base command fails
+    trust_command = base_command[:-1] + ["--trust-remote-code", base_command[-1]]
+
     print(f"\n{Colors.CYAN}Quantizing {device.upper()} model: {model_id}{Colors.ENDC}")
     print(f"{Colors.GRAY}Output: {output_path}{Colors.ENDC}")
-    print(f"{Colors.GRAY}Command: {' '.join(command)}{Colors.ENDC}")
+    print(f"{Colors.GRAY}Command: {' '.join(base_command)}{Colors.ENDC}")
     print(f"{Colors.YELLOW}This may take several minutes to download and quantize the model...{Colors.ENDC}")
-    
+
     # Set up environment
     env = os.environ.copy()
     if hf_token:
         env['HF_TOKEN'] = hf_token
         env['HUGGINGFACE_HUB_TOKEN'] = hf_token  # Some models check this variable
-    
+
     # Ensure environment variables for HF are set
     env['HF_HUB_ENABLE_HF_TRANSFER'] = '0'  # Disable HF transfer for stability
-    
-    # Run in virtual environment with verbose output for debugging
-    success = run_command(
-        command_str=f'call "{Path(venv_path) / "Scripts" / "activate.bat"}" && {" ".join(command)}',
-        working_directory=llm_bench_path,
-        stop_on_error=False,
-        env=env,
-        verbose=True
-    )
-    
-    if success:
-        # Verify the quantization was successful
-        if (output_path / "openvino_model.xml").exists():
-            print(f"{Colors.GREEN}{device.upper()} quantization completed: {output_path}{Colors.ENDC}")
-            return True
-        else:
-            print(f"{Colors.RED}{device.upper()} quantization failed - missing output files{Colors.ENDC}")
-            return False
-    else:
-        print(f"{Colors.RED}{device.upper()} quantization failed for {model_id}{Colors.ENDC}")
-        return False
+
+    # Helper to run a command list inside the activated venv
+    def _run_export(cmd_list):
+        cmd_str = f'call "{Path(venv_path) / "Scripts" / "activate.bat"}" && {" ".join(cmd_list)}'
+        return run_command(
+            command_str=cmd_str,
+            working_directory=llm_bench_path,
+            stop_on_error=False,
+            env=env,
+            verbose=True
+        )
+
+    # First attempt: without --trust-remote-code
+    _run_export(base_command)
+    # Check whether output was created
+    if (output_path / "openvino_model.xml").exists():
+        print(f"{Colors.GREEN}{device.upper()} quantization completed (attempt 1): {output_path}{Colors.ENDC}")
+        return True
+
+    # Second attempt: with --trust-remote-code
+    print(f"{Colors.YELLOW}Quantization failed; trying with --trust-remote-code...{Colors.ENDC}")
+    print(f"{Colors.GRAY}Command: {' '.join(trust_command)}{Colors.ENDC}")
+    _run_export(trust_command)
+
+    if (output_path / "openvino_model.xml").exists():
+        print(f"{Colors.GREEN}{device.upper()} quantization completed (attempt 2): {output_path}{Colors.ENDC}")
+        return True
+
+    # Both attempts failed
+    print(f"{Colors.RED}Quantization failed for {model_id}.{Colors.ENDC}")
+    return False
 
 def run_in_activated_environment(venv_path, command, working_directory=None, env_vars=None):
     """Executes a command within the specified virtual environment."""
